@@ -1,1 +1,27 @@
 
+awr-miniapp/
+├─ backend/             # Node.js сервер (Express + TypeScript)
+│  ├─ src/
+│  │  ├─ controllers/   # API для задач, материалов, отчетов
+│  │  ├─ models/        # Модели базы данных (Sequelize)
+│  │  ├─ routes/        # Роуты API
+│  │  ├─ services/      # Сервис для Telegram и логики
+│  │  ├─ app.ts         # Express app
+│  │  └─ server.ts      # Запуск сервера
+│  ├─ package.json
+│  └─ tsconfig.json
+├─ frontend/            # React + TypeScript
+│  ├─ public/
+│  ├─ src/
+│  │  ├─ components/    # Таблицы, формы, меню
+│  │  ├─ pages/         # Dashboard по ролям
+│  │  ├─ api/           # Запросы к backend
+│  │  ├─ App.tsx
+│  │  └─ index.tsx
+│  ├─ package.json
+│  └─ tsconfig.json
+├─ telegram-bot/        # Telegram bot для открытия мини-приложения
+│  ├─ bot.ts
+│  ├─ package.json
+│  └─ tsconfig.json
+└─ README.md
