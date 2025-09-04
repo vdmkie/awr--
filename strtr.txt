@@ -1,274 +1,129 @@
-Frontend
-frontend/package.json
-{
-  "name": "awr-frontend",
-  "version": "1.0.0",
-  "private": true,
-  "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-scripts": "5.0.1",
-    "typescript": "^5.2.2"
-  },
-  "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "serve": "serve -s build"
-  }
-}
+Привет 
+помоги создать красивое полноценное и функциональное мини приложение для  телеграмм и что б можно было с ПК использовать с современным дизайном , логотипом (картинкой) при запуске, кнопками, меню. 
 
-frontend/tsconfig.json
-{
-  "compilerOptions": {
-    "target": "es5",
-    "lib": ["dom", "dom.iterable", "esnext"],
-    "allowJs": true,
-    "skipLibCheck": true,
-    "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
-    "strict": true,
-    "forceConsistentCasingInFileNames": true,
-    "module": "esnext",
-    "moduleResolution": "node",
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "noEmit": true,
-    "jsx": "react-jsx"
-  },
-  "include": ["src"]
-}
+Название приложения:
+AWR 
+assistant work resurs 
 
-frontend/src/index.tsx
-import React from "react";
-import ReactDOM from "react-dom/client";
-import App from "./App";
+Суть приложения: 
+Есть админы ( 4 человека) 
+Есть бригады (10 бригад по 2 чел.) 
+Есть кладовщик 
 
-const root = ReactDOM.createRoot(document.getElementById("root")!);
-root.render(<App />);
+Админы:
+ назначают на бригады задания и видят общий список задач, материалов и инструмента по бригадам, могут переназначить в задании бригаду, удалить задание, менять статус задания.
+есть пункт отчёты (где хранятся все отчёты бригад и есть фильтры для поиска отчётов по статусу, адресу, бригаде. 
+есть пункт доступ (где хранится инфо о доступе из отчётов и есть тоже фильтр по адресу 
 
-frontend/src/App.tsx
-import React, { useState } from "react";
-import Admin from "./pages/Admin";
-import Brigade from "./pages/Brigade";
-import Storekeeper from "./pages/Storekeeper";
+задание должно иметь поля:
+Адрес
+ТЗ
+Доступ 
+пометка 
+Бригада что назначена. 
 
-function App() {
-  const [role, setRole] = useState<string | null>(null);
-  const [telegramId, setTelegramId] = useState("");
-  const [password, setPassword] = useState("");
-
-  const login = () => {
-    fetch("http://localhost:8000/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ telegram_id: telegramId, password })
-    })
-      .then(res => res.json())
-      .then(data => setRole(data.role));
-  };
-
-  if (!role) {
-    return (
-      <div className="p-4">
-        <h1>Авторизация</h1>
-        <input placeholder="Telegram ID" value={telegramId} onChange={e => setTelegramId(e.target.value)} />
-        <input placeholder="Пароль" type="password" value={password} onChange={e => setPassword(e.target.value)} />
-        <button onClick={login}>Войти</button>
-      </div>
-    );
-  }
-
-  if (role === "admin") return <Admin />;
-  if (role === "brigade") return <Brigade />;
-  if (role === "storekeeper") return <Storekeeper />;
-
-  return <div>Неверная роль</div>;
-}
-
-export default App;
-
-frontend/src/pages/Admin.tsx
-import React, { useState, useEffect } from "react";
-import TaskList from "../components/TaskList";
-import TaskCreateForm from "../components/TaskCreateForm";
-
-const Admin = () => {
-  const [tasks, setTasks] = useState<any[]>([]);
-  const fetchTasks = () => {
-    fetch("http://localhost:8000/tasks")
-      .then(r => r.json())
-      .then(data => setTasks(data));
-  };
-  useEffect(() => { fetchTasks(); }, []);
-  return (
-    <div className="p-4">
-      <h1>Меню администратора</h1>
-      <TaskCreateForm refreshTasks={fetchTasks} />
-      <TaskList tasks={tasks} refreshTasks={fetchTasks} />
-    </div>
-  );
-};
-
-export default Admin;
-
-frontend/src/pages/Brigade.tsx
-import React, { useEffect, useState } from "react";
-import ReportForm from "../components/ReportForm";
-
-const Brigade = () => {
-  const [tasks, setTasks] = useState<any[]>([]);
-  const fetchTasks = () => {
-    fetch("http://localhost:8000/tasks?brigade_id=1")
-      .then(r => r.json())
-      .then(data => setTasks(data));
-  };
-  useEffect(() => { fetchTasks(); }, []);
-  return (
-    <div className="p-4">
-      <h1>Меню бригады</h1>
-      {tasks.map(task => (
-        <div key={task.id} className="border p-2 mb-2">
-          <div><b>Адрес:</b> {task.address}</div>
-          <div><b>ТЗ:</b> {task.tz}</div>
-          <ReportForm taskId={task.id} refreshTasks={fetchTasks}/>
-        </div>
-      ))}
-    </div>
-  );
-};
-
-export default Brigade;
-
-frontend/src/pages/Storekeeper.tsx
-import React, { useEffect, useState } from "react";
-
-const Storekeeper = () => {
-  const [materials, setMaterials] = useState<any[]>([]);
-  const [tools, setTools] = useState<any[]>([]);
-  const fetchData = () => {
-    fetch("http://localhost:8000/materials").then(r => r.json()).then(data => setMaterials(data));
-    fetch("http://localhost:8000/tools").then(r => r.json()).then(data => setTools(data));
-  };
-  useEffect(() => { fetchData(); }, []);
-  const exportExcel = () => { window.location.href="http://localhost:8000/export_excel"; };
-  return (
-    <div className="p-4">
-      <h1>Меню кладовщика</h1>
-      <button onClick={exportExcel}>Выгрузить Excel</button>
-      <div>
-        <h2>Материалы</h2>
-        {materials.map(m=> <div key={m.id}>{m.name} - {m.quantity} {m.unit}</div>)}
-      </div>
-      <div>
-        <h2>Инструмент</h2>
-        {tools.map(t=> <div key={t.id}>{t.name} - {t.serial_number}</div>)}
-      </div>
-    </div>
-  );
-};
-
-export default Storekeeper;
-
-frontend/src/components/TaskCreateForm.tsx
-import React, { useState } from "react";
-
-interface Props { refreshTasks: () => void; }
-
-const TaskCreateForm: React.FC<Props> = ({ refreshTasks }) => {
-  const [address, setAddress] = useState("");
-  const [tz, setTz] = useState("");
-  const [note, setNote] = useState("");
-  const [brigadeId, setBrigadeId] = useState(1);
-
-  const submitTask = () => {
-    fetch("http://localhost:8000/tasks", {
-      method:"POST",
-      headers: {"Content-Type":"application/json"},
-      body: JSON.stringify({address, tz, note, brigade_id:brigadeId, status:"new"})
-    }).then(()=>{ setAddress(""); setTz(""); setNote(""); refreshTasks(); });
-  };
-
-  return (
-    <div>
-      <input placeholder="Адрес" value={address} onChange={e=>setAddress(e.target.value)} />
-      <input placeholder="ТЗ" value={tz} onChange={e=>setTz(e.target.value)} />
-      <input placeholder="Пометка" value={note} onChange={e=>setNote(e.target.value)} />
-      <input type="number" placeholder="Бригада ID" value={brigadeId} onChange={e=>setBrigadeId(Number(e.target.value))} />
-      <button onClick={submitTask}>Создать задачу</button>
-    </div>
-  );
-};
-
-export default TaskCreateForm;
-
-frontend/src/components/TaskList.tsx
-import React from "react";
-
-interface Props { tasks:any[], refreshTasks:()=>void; }
-
-const TaskList:React.FC<Props> = ({tasks, refreshTasks})=>{
-  const updateStatus=(id:number,status:string)=>{
-    fetch(`http://localhost:8000/tasks/${id}`,{
-      method:"PUT",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({status})
-    }).then(()=>refreshTasks());
-  };
-  return (
-    <div>
-      {tasks.map(task=>
-        <div key={task.id} className="border p-2 mb-2">
-          <div>Адрес: {task.address}</div>
-          <div>ТЗ: {task.tz}</div>
-          <div>Бригада: {task.brigade_id}</div>
-          <div>Статус: {task.status}</div>
-          <button onClick={()=>updateStatus(task.id,"in_progress")}>В работе</button>
-          <button onClick={()=>updateStatus(task.id,"done")}>Выполнено</button>
-          <button onClick={()=>updateStatus(task.id,"postponed")}>Отложено</button>
-          <button onClick={()=>updateStatus(task.id,"problem")}>Проблемный</button>
-        </div>
-      )}
-    </div>
-  );
-};
-
-export default TaskList;
-
-frontend/src/components/ReportForm.tsx
-import React, { useState } from "react";
-
-interface Props { taskId:number, refreshTasks:()=>void }
-
-const ReportForm:React.FC<Props> = ({taskId,refreshTasks})=>{
-  const [comment,setComment]=useState("");
-  const [access,setAccess]=useState("");
-  const [materials,setMaterials]=useState("");
-  const [photos,setPhotos]=useState("");
-
-  const submitReport=()=>{
-    fetch("http://localhost:8000/reports",{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({task_id:taskId, comment, access, materials, photos:photos.split(",")})
-    }).then(()=>{ setComment(""); setAccess(""); setMaterials(""); setPhotos(""); refreshTasks(); });
-  };
-
-  return (
-    <div>
-      <input placeholder="Комментарий" value={comment} onChange={e=>setComment(e.target.value)} />
-      <input placeholder="Доступ" value={access} onChange={e=>setAccess(e.target.value)} />
-      <input placeholder="Материалы" value={materials} onChange={e=>setMaterials(e.target.value)} />
-      <input placeholder="Фото URL через запятую" value={photos} onChange={e=>setPhotos(e.target.value)} />
-      <button onClick={submitReport}>Отправить отчет</button>
-    </div>
-  );
-};
-
-export default ReportForm;
+Есть статусы: 
+Новая задача 
+В работе 
+Выполнено 
+Отложено
+Проблемный дом 
 
 
-✅ С этим frontend и backend проект полностью рабочий. Можно заливать на GitHub, настраивать Render для деплоя:
+Бригады:
+видят список задач назначенные им, видят остаток материалов и инструмента что закреплён за ними. 
+выполняют задачи, дают отчёт и списывают материал по каждой задаче.
+отчет должен быть из 4 частей, и может заполняться в разное время
+1 часть - комментарий 
+2 часть - доступ
+3 часть - Фото
+4 часть - материалы
 
-Backend на FastAPI (порт 8000)
+задача должна оставаться в статусе "в работе" пока не будут сделан отчет по 3 пунктам. 
 
-Frontend на React (порт 3000 или через build)
+
+Кладовщик:
+добавляет материалы и инструмент на общий склад (так же может убрать материалы и инструмент со склада) выдает бригадам материалы и инструмент, может вернуть на склад с бригады, переместить между бригадами и ведёт учёт...
+Видит таблицу со списком бригад, у кого сколько материалов на руках и какой инструмент, видно остатки по складу. 
+Есть кнопка выгрузить excel файл на ПК
+Материалы считаются в метрах ,штуках и килограммах (м, шт и кг)
+
+Список материалов и в чем измеряются: 
+- Кабель ВОК 4 100(м)
+- Кабель ВОК 8 100(м)
+- Кабель ВОК 12 100(м)
+- БО/16 100(шт)
+- БО/24 100(шт)
+- БО/32 100(шт)
+- Муфта (квадрат) 100(шт)
+- Муфта (колба)100(шт) 
+- делитель 1/2 100(шт)
+- делитель 1/4 100(шт)
+- дюбель 6х40 100(шт)
+- дюбель 8х60 100(шт)
+- перфолента 100(шт)
+- изолента 100(шт)
+- анкер 100(шт)
+- крепления для гофры 100(шт)
+- крепления для труб 100(шт)
+- гофра 100(м)
+- трубы 100(м)
+- шпаклёвка 100(кг)
+- патчкодр  100(шт)
+- натяжитель-Н3 100(шт)
+- натяжитель-H26 100(шт)
+
+Список Инструмента должен фиксироваться по серийному номеру:
+Список:
+перфоратор проводной
+перфоратор безпроводной 
+аккумулятор
+зарядное устройство
+сварочный 
+тестер 
+рефлектометр
+скалыватель 
+болгарка 
+удленитель 
+лестница 
+
+пользователь открывает бот, запускает приложение. На стартовом экране пункт авторизоваться  (телеграмм ID + пароль (вноситься в базу).  Пользователь авторизируется и, если он есть в базе то ему открывается мини приложение с его интервейсом в зависимости кем он является (админ, бригада, кладовщик) 
+
+У меня в ТГ есть супергруппа с топиками для каждой бригады. 
+Хочу что б при подаче отчетов - отчеты попадают в супер группу телеграмм (у каждой бригады свой топик) 
+
+Весь процесс должен быть именно в приложении , телеграм бот только открывает мини приложение
+
+У всех пользователей должно быть меню с кнопками . 
+
+Интерфейс админа: 
+Меню:
+- активные задачи (фильтр и редактирование задач) 
+- назначить задачу (и все функции ТЗ)
+- материалы что у бригад на руках 
+- инструмент что у бригад на руках 
+- остатки материалов по складу
+
+Интерфейс бригады: 
+Меню: 
+- мои задачи (показывает активные) 
+- выполненные задачи 
+- отложенные задачи 
+- проблемные дома 
+- мои материалы (показывает остатки что на руках у бригады) 
+- мой инструмент (показывает какое оборудование у них числится) 
+
+Интерфейс кладовщика: 
+Меню:
+- выдать материал (на бригаду) 
+- принять материал (от бригады) 
+- переместить материал (между бригадами) 
+- выдать инструмент (на бригаду)
+- принять инструмент (на склад) 
+- переместить инструмент (между бригадами) 
+- пополнить склад (материалы или инструмент которые вносятся на склад) 
+- остатки по складу (материал и инструмент что числиться на складе и никому не выдан)
+Выгрузка Excel
+
+
+Приложение буду запускать на рендер через гитхаб
