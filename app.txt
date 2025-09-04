@@ -1,1 +1,139 @@
+import React, { useState } from 'react';
+
+interface Task {
+  address: string;
+  floors: number;
+  type: string;
+  status: string;
+}
+
+function App() {
+  const [role, setRole] = useState<'admin' | 'brigade' | 'storeman' | null>(null);
+  const [activeItem, setActiveItem] = useState<string>('');
+  const [tasks, setTasks] = useState<Task[]>([
+    { address: 'ул. Ленина 10', floors: 5, type: 'Воздушка', status: 'В работе' },
+    { address: 'пр. Победы 23', floors: 3, type: 'Сварка', status: 'Новая задача' },
+  ]);
+
+  const containerStyle: React.CSSProperties = {
+    fontFamily: 'Arial, sans-serif',
+    backgroundColor: '#f5f7ff',
+    minHeight: '100vh',
+    display: 'flex',
+  };
+
+  const sidebarStyle: React.CSSProperties = {
+    width: '300px',
+    backgroundColor: '#1e293b',
+    color: '#fff',
+    padding: '20px',
+    display: 'flex',
+    flexDirection: 'column',
+    borderTopRightRadius: '20px',
+    borderBottomRightRadius: '20px',
+  };
+
+  const mainStyle: React.CSSProperties = {
+    flex: 1,
+    padding: '30px',
+    backgroundColor: '#f5f7ff',
+  };
+
+  const menuItemStyle = (item: string): React.CSSProperties => ({
+    padding: '14px 20px',
+    marginBottom: '10px',
+    borderRadius: '12px',
+    backgroundColor: activeItem === item ? '#4f46e5' : 'transparent',
+    color: activeItem === item ? '#fff' : '#cbd5e1',
+    fontWeight: activeItem === item ? 'bold' : 'normal',
+    cursor: 'pointer',
+    transition: 'all 0.3s ease',
+    textAlign: 'left',
+  });
+
+  const renderMenuItems = () => {
+    if (!role) return null;
+    let items: string[] = [];
+    if (role === 'admin') {
+      items = ['Активные задачи','Новая задача','Отчёты','Доступ инфо','Материалы бригад','Инструмент бригад','Остатки склада','Дома на сдачу'];
+    } else if (role === 'brigade') {
+      items = ['Мои задачи','Выполненные задачи','Отложенные задачи','Проблемные дома','Мои материалы','Мой инструмент'];
+    } else if (role === 'storeman') {
+      items = ['Выдать материал','Принять материал','Списать материал','Переместить материал','Выдать инструмент','Принять инструмент','Списать инструмент','Переместить инструмент','Пополнить склад','Остатки по складу','Выгрузка Excel'];
+    }
+
+    return items.map(item => (
+      <div key={item} style={menuItemStyle(item)} onClick={() => setActiveItem(item)}>{item}</div>
+    ));
+  };
+
+  const handleStatusChange = (index: number, newStatus: string) => {
+    const updatedTasks = [...tasks];
+    updatedTasks[index].status = newStatus;
+    setTasks(updatedTasks);
+  };
+
+  const renderTasks = () => {
+    if (!tasks.length) return <p>Нет задач</p>;
+    return (
+      <table style={{width: '100%', borderCollapse: 'collapse'}}>
+        <thead>
+          <tr>
+            <th style={{borderBottom: '2px solid #ccc', padding: '8px', textAlign: 'left'}}>Адрес</th>
+            <th style={{borderBottom: '2px solid #ccc', padding: '8px'}}>Этажи</th>
+            <th style={{borderBottom: '2px solid #ccc', padding: '8px'}}>Тип работ</th>
+            <th style={{borderBottom: '2px solid #ccc', padding: '8px'}}>Статус</th>
+          </tr>
+        </thead>
+        <tbody>
+          {tasks.map((task, index) => (
+            <tr key={index} style={{backgroundColor: index % 2 === 0 ? '#fff' : '#f0f0f0'}}>
+              <td style={{padding: '8px'}}>{task.address}</td>
+              <td style={{padding: '8px'}}>{task.floors}</td>
+              <td style={{padding: '8px'}}>{task.type}</td>
+              <td style={{padding: '8px'}}>
+                <select value={task.status} onChange={(e) => handleStatusChange(index, e.target.value)}>
+                  <option value="Новая задача">Новая задача</option>
+                  <option value="В работе">В работе</option>
+                  <option value="Выполнено">Выполнено</option>
+                  <option value="Отложено">Отложено</option>
+                  <option value="Проблемный дом">Проблемный дом</option>
+                </select>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  };
+
+  const renderDashboard = () => {
+    if (!role) return <div style={{textAlign: 'center', fontSize: '18px'}}>Выберите роль для просмотра интерфейса</div>;
+    return <div>
+      <h2 style={{color: '#1e293b'}}>{role.charAt(0).toUpperCase() + role.slice(1)} Dashboard</h2>
+      {activeItem && <p style={{marginTop: '20px', fontSize: '16px'}}>Выбрано: {activeItem}</p>}
+      {(activeItem === 'Активные задачи' || activeItem === 'Мои задачи') && renderTasks()}
+    </div>;
+  };
+
+  return (
+    <div style={containerStyle}>
+      <div style={sidebarStyle}>
+        <h1 style={{marginBottom: '30px', textAlign: 'center', color: '#fff'}}>AWR</h1>
+        {!role && (
+          <>
+            <div style={menuItemStyle('Admin')} onClick={() => setRole('admin')}>Admin</div>
+            <div style={menuItemStyle('Brigade')} onClick={() => setRole('brigade')}>Brigade</div>
+            <div style={menuItemStyle('Storeman')} onClick={() => setRole('storeman')}>Storeman</div>
+          </>
+        )}
+        {role && <div style={{...menuItemStyle('Сменить роль'), marginTop: '20px'}} onClick={() => { setRole(null); setActiveItem(''); }}>Сменить роль</div>}
+        <div style={{marginTop: '30px'}}>{renderMenuItems()}</div>
+      </div>
+      <main style={mainStyle}>{renderDashboard()}</main>
+    </div>
+  );
+}
+
+export default App;
 
