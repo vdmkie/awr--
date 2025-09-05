@@ -1,139 +1,932 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from "react";
 
-interface Task {
-  address: string;
-  floors: number;
-  type: string;
-  status: string;
+// ==========================
+//  AWR — Assistant Work Resurs
+//  Мини‑приложение Telegram + Web (один файл)
+//  Соответствует ТЗ из чата:
+//    Роли: супер‑админ, админы (2), бригады (10×2), кладовщик (2)
+//    Функции:
+//      - Назначение задач админам/бригадам
+//      - Общий список задач + фильтры (по типу исполнителя, конкретной бригаде/админу, только активные, поиск «на лету»)
+//      - Переназначение, удаление, смена статуса
+//      - Остатки материалов и инструмента по бригадам
+//      - Раздел «Отчёты» с фильтрами (статус, адрес, бригада)
+//      - Раздел «Доступ инфо» (доступы, сохранённые из отчётов)
+//      - Экспорт CSV (задачи и отчёты)
+//      - Интеграция с Telegram WebApp (graceful fallback)
+//      - Авторизация (тест‑логины):
+//          супер‑админ: login "1" / pass "1"
+//          админ:       login "2" / pass "1"
+//          бригада‑1:   login "3" / pass "1"
+//          кладовщик:   login "4" / pass "1"
+// ==========================
+
+// ---- Роли ----
+const ROLES = {
+  SUPER_ADMIN: "super_admin",
+  ADMIN: "admin",
+  CREW: "crew",
+  STOREKEEPER: "storekeeper",
+};
+
+// ---- Статусы задач ----
+const TASK_STATUSES = [
+  { key: "new", label: "Новая", color: "bg-blue-100 text-blue-700" },
+  { key: "in_progress", label: "В работе", color: "bg-amber-100 text-amber-700" },
+  { key: "paused", label: "Пауза", color: "bg-gray-100 text-gray-700" },
+  { key: "blocked", label: "Блокирована", color: "bg-red-100 text-red-700" },
+  { key: "done", label: "Готово", color: "bg-green-100 text-green-700" },
+];
+const ACTIVE_STATUS_KEYS = new Set(["new", "in_progress", "paused", "blocked"]);
+
+// ---- Утилиты ----
+const uid = () => Math.random().toString(36).slice(2, 10);
+const ts = () => new Date().toISOString();
+const statusMeta = (key) => TASK_STATUSES.find((s) => s.key === key) || TASK_STATUSES[0];
+const toDateInputValue = (dStr) => (dStr ? new Date(dStr).toISOString().slice(0, 10) : "");
+
+function useLocalStorage(key, initial) {
+  const [value, setValue] = useState(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : initial;
+    } catch {
+      return initial;
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
+  }, [key, value]);
+  return [value, setValue];
 }
 
-function App() {
-  const [role, setRole] = useState<'admin' | 'brigade' | 'storeman' | null>(null);
-  const [activeItem, setActiveItem] = useState<string>('');
-  const [tasks, setTasks] = useState<Task[]>([
-    { address: 'ул. Ленина 10', floors: 5, type: 'Воздушка', status: 'В работе' },
-    { address: 'пр. Победы 23', floors: 3, type: 'Сварка', status: 'Новая задача' },
-  ]);
+// ---- Мок‑пользователи и справочники ----
+const mockUsers = [
+  { id: "u_sa", login: "1", pass: "1", name: "Супер‑админ", role: ROLES.SUPER_ADMIN },
+  { id: "u_a1", login: "2", pass: "1", name: "Админ‑1", role: ROLES.ADMIN },
+  { id: "u_b1", login: "3", pass: "1", name: "Бригада‑1", role: ROLES.CREW, crewId: "c1" },
+  { id: "u_sk1", login: "4", pass: "1", name: "Кладовщик‑1", role: ROLES.STOREKEEPER },
+];
 
-  const containerStyle: React.CSSProperties = {
-    fontFamily: 'Arial, sans-serif',
-    backgroundColor: '#f5f7ff',
-    minHeight: '100vh',
-    display: 'flex',
+const crews = [
+  { id: "c1", name: "Бригада‑1" },
+  { id: "c2", name: "Бригада‑2" },
+  { id: "c3", name: "Бригада‑3" },
+  { id: "c4", name: "Бригада‑4" },
+  { id: "c5", name: "Бригада‑5" },
+  { id: "c6", name: "Бригада‑6" },
+  { id: "c7", name: "Бригада‑7" },
+  { id: "c8", name: "Бригада‑8" },
+  { id: "c9", name: "Бригада‑9" },
+  { id: "c10", name: "Бригада‑10" },
+];
+
+const admins = [
+  { id: "a1", name: "Админ‑1" },
+  { id: "a2", name: "Админ‑2" },
+];
+
+// ---- Начальные данные ----
+const initialState = {
+  tasks: [
+    {
+      id: uid(),
+      title: "Подключение интернета",
+      address: "ул. Центральная, 10",
+      description: "Прокладка UTP, настройка роутера",
+      status: "new",
+      priority: "high",
+      dueDate: new Date(Date.now() + 86400000).toISOString(),
+      tags: ["FTTH", "Router"],
+      assignedType: "crew", // crew | admin
+      assignedId: "c1",
+      createdAt: ts(),
+      createdBy: "u_sa",
+    },
+    {
+      id: uid(),
+      title: "Ремонт линии",
+      address: "пр‑т Мира, 22",
+      description: "Диагностика, замена коннекторов",
+      status: "in_progress",
+      priority: "normal",
+      dueDate: new Date(Date.now() + 2*86400000).toISOString(),
+      tags: ["LAN"],
+      assignedType: "admin",
+      assignedId: "a1",
+      createdAt: ts(),
+      createdBy: "u_sa",
+    },
+  ],
+  reports: [
+    {
+      id: uid(),
+      taskId: null,
+      crewId: "c1",
+      authorUserId: "u_b1",
+      status: "success", // success | fail | partial
+      address: "ул. Центральная, 10",
+      createdAt: ts(),
+      text: "Подключение выполнено, сигнал стабильный.",
+      photos: [],
+      access: { login: "admin", pass: "admin123", ip: "192.168.0.1", note: "Default creds сменить" },
+    },
+  ],
+  inventory: {
+    // по бригадам
+    c1: [
+      { id: uid(), name: "UTP Cat5e бухта", qty: 1, unit: "шт" },
+      { id: uid(), name: "Коннектор RJ45", qty: 50, unit: "шт" },
+      { id: uid(), name: "Шуруповёрт", qty: 1, unit: "шт" },
+    ],
+    c2: [ { id: uid(), name: "Patch‑cord 1m", qty: 10, unit: "шт" } ],
+  },
+  accessVault: [
+    // агрегированные доступы из отчётов
+    { id: uid(), sourceReportId: null, address: "ул. Центральная, 10", login: "admin", pass: "admin123", ip: "192.168.0.1", note: "Default" },
+  ],
+};
+
+// ---- Экспорт CSV ----
+const toCSV = (rows, headers) => {
+  const esc = (v) => {
+    if (v == null) return "";
+    const s = String(v).replace(/"/g, '""');
+    return /[",\n]/.test(s) ? `"${s}"` : s;
   };
+  const head = headers.map(h => esc(h.label)).join(",");
+  const body = rows.map(r => headers.map(h => esc(h.get(r))).join(",")).join("\n");
+  return head + "\n" + body;
+};
+const downloadText = (filename, text) => {
+  const blob = new Blob([text], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 500);
+};
 
-  const sidebarStyle: React.CSSProperties = {
-    width: '300px',
-    backgroundColor: '#1e293b',
-    color: '#fff',
-    padding: '20px',
-    display: 'flex',
-    flexDirection: 'column',
-    borderTopRightRadius: '20px',
-    borderBottomRightRadius: '20px',
-  };
+// ---- Компоненты UI ----
+function Pill({ children, color }) {
+  return <span className={`px-2 py-0.5 rounded-full text-xs ${color || "bg-slate-100 text-slate-700"}`}>{children}</span>;
+}
 
-  const mainStyle: React.CSSProperties = {
-    flex: 1,
-    padding: '30px',
-    backgroundColor: '#f5f7ff',
-  };
-
-  const menuItemStyle = (item: string): React.CSSProperties => ({
-    padding: '14px 20px',
-    marginBottom: '10px',
-    borderRadius: '12px',
-    backgroundColor: activeItem === item ? '#4f46e5' : 'transparent',
-    color: activeItem === item ? '#fff' : '#cbd5e1',
-    fontWeight: activeItem === item ? 'bold' : 'normal',
-    cursor: 'pointer',
-    transition: 'all 0.3s ease',
-    textAlign: 'left',
-  });
-
-  const renderMenuItems = () => {
-    if (!role) return null;
-    let items: string[] = [];
-    if (role === 'admin') {
-      items = ['Активные задачи','Новая задача','Отчёты','Доступ инфо','Материалы бригад','Инструмент бригад','Остатки склада','Дома на сдачу'];
-    } else if (role === 'brigade') {
-      items = ['Мои задачи','Выполненные задачи','Отложенные задачи','Проблемные дома','Мои материалы','Мой инструмент'];
-    } else if (role === 'storeman') {
-      items = ['Выдать материал','Принять материал','Списать материал','Переместить материал','Выдать инструмент','Принять инструмент','Списать инструмент','Переместить инструмент','Пополнить склад','Остатки по складу','Выгрузка Excel'];
-    }
-
-    return items.map(item => (
-      <div key={item} style={menuItemStyle(item)} onClick={() => setActiveItem(item)}>{item}</div>
-    ));
-  };
-
-  const handleStatusChange = (index: number, newStatus: string) => {
-    const updatedTasks = [...tasks];
-    updatedTasks[index].status = newStatus;
-    setTasks(updatedTasks);
-  };
-
-  const renderTasks = () => {
-    if (!tasks.length) return <p>Нет задач</p>;
-    return (
-      <table style={{width: '100%', borderCollapse: 'collapse'}}>
-        <thead>
-          <tr>
-            <th style={{borderBottom: '2px solid #ccc', padding: '8px', textAlign: 'left'}}>Адрес</th>
-            <th style={{borderBottom: '2px solid #ccc', padding: '8px'}}>Этажи</th>
-            <th style={{borderBottom: '2px solid #ccc', padding: '8px'}}>Тип работ</th>
-            <th style={{borderBottom: '2px solid #ccc', padding: '8px'}}>Статус</th>
-          </tr>
-        </thead>
-        <tbody>
-          {tasks.map((task, index) => (
-            <tr key={index} style={{backgroundColor: index % 2 === 0 ? '#fff' : '#f0f0f0'}}>
-              <td style={{padding: '8px'}}>{task.address}</td>
-              <td style={{padding: '8px'}}>{task.floors}</td>
-              <td style={{padding: '8px'}}>{task.type}</td>
-              <td style={{padding: '8px'}}>
-                <select value={task.status} onChange={(e) => handleStatusChange(index, e.target.value)}>
-                  <option value="Новая задача">Новая задача</option>
-                  <option value="В работе">В работе</option>
-                  <option value="Выполнено">Выполнено</option>
-                  <option value="Отложено">Отложено</option>
-                  <option value="Проблемный дом">Проблемный дом</option>
-                </select>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    );
-  };
-
-  const renderDashboard = () => {
-    if (!role) return <div style={{textAlign: 'center', fontSize: '18px'}}>Выберите роль для просмотра интерфейса</div>;
-    return <div>
-      <h2 style={{color: '#1e293b'}}>{role.charAt(0).toUpperCase() + role.slice(1)} Dashboard</h2>
-      {activeItem && <p style={{marginTop: '20px', fontSize: '16px'}}>Выбрано: {activeItem}</p>}
-      {(activeItem === 'Активные задачи' || activeItem === 'Мои задачи') && renderTasks()}
-    </div>;
-  };
-
+function Toolbar({ title, right }) {
   return (
-    <div style={containerStyle}>
-      <div style={sidebarStyle}>
-        <h1 style={{marginBottom: '30px', textAlign: 'center', color: '#fff'}}>AWR</h1>
-        {!role && (
-          <>
-            <div style={menuItemStyle('Admin')} onClick={() => setRole('admin')}>Admin</div>
-            <div style={menuItemStyle('Brigade')} onClick={() => setRole('brigade')}>Brigade</div>
-            <div style={menuItemStyle('Storeman')} onClick={() => setRole('storeman')}>Storeman</div>
-          </>
-        )}
-        {role && <div style={{...menuItemStyle('Сменить роль'), marginTop: '20px'}} onClick={() => { setRole(null); setActiveItem(''); }}>Сменить роль</div>}
-        <div style={{marginTop: '30px'}}>{renderMenuItems()}</div>
-      </div>
-      <main style={mainStyle}>{renderDashboard()}</main>
+    <div className="flex items-center justify-between mb-4">
+      <h2 className="text-xl font-semibold">{title}</h2>
+      <div className="flex items-center gap-2">{right}</div>
     </div>
   );
 }
 
-export default App;
+function Modal({ open, onClose, children }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="relative bg-white dark:bg-neutral-900 rounded-2xl shadow-xl w-[min(720px,95vw)] max-h-[90vh] overflow-auto p-4">{children}</div>
+    </div>
+  );
+}
 
+function BadgeStatus({ status }) {
+  const m = statusMeta(status);
+  return <Pill color={m.color}>{m.label}</Pill>;
+}
+
+// ---- Главный компонент ----
+export default function App() {
+  // Telegram WebApp init (если доступен)
+  useEffect(() => {
+    const tg = window.Telegram?.WebApp;
+    try { if (tg) { tg.ready(); tg.expand?.(); } } catch {}
+  }, []);
+
+  const [auth, setAuth] = useLocalStorage("awr_auth", null); // { userId, role, name, crewId? }
+  const me = useMemo(() => mockUsers.find((u) => u.id === auth?.userId) || null, [auth]);
+
+  const [db, setDb] = useLocalStorage("awr_db", initialState);
+  const [activeTab, setActiveTab] = useLocalStorage("awr_tab", "tasks"); // tasks | reports | inventory | access | admin
+
+  // Параметры фильтра задач
+  const [query, setQuery] = useState("");
+  const [onlyActive, setOnlyActive] = useState(true);
+  const [assigneeType, setAssigneeType] = useState("all"); // all | crew | admin
+  const [assigneeId, setAssigneeId] = useState("all");
+
+  // Загрузка логотипа (локальный превью)
+  const [logoUrl, setLogoUrl] = useLocalStorage("awr_logo", "");
+
+  // ---- Авторизация ----
+  const tryLogin = (login, pass) => {
+    const u = mockUsers.find((x) => x.login === login && x.pass === pass);
+    if (!u) return { ok: false, err: "Неверные логин или пароль" };
+    setAuth({ userId: u.id, role: u.role, name: u.name, crewId: u.crewId });
+    return { ok: true };
+  };
+
+  const logout = () => setAuth(null);
+
+  // ---- Операции с данными ----
+  const addTask = (t) => setDb((d) => ({ ...d, tasks: [{ ...t, id: uid(), createdAt: ts() }, ...d.tasks] }));
+  const updateTask = (id, patch) => setDb((d) => ({ ...d, tasks: d.tasks.map((t) => (t.id === id ? { ...t, ...patch } : t)) }));
+  const deleteTask = (id) => setDb((d) => ({ ...d, tasks: d.tasks.filter((t) => t.id !== id) }));
+
+  const addReport = (r) => {
+    const rep = { ...r, id: uid(), createdAt: ts() };
+    setDb((d) => ({ ...d, reports: [rep, ...d.reports] }));
+    // Если в отчёте есть доступы — сохраняем в Access Vault
+    if (r.access && (r.access.login || r.access.pass || r.access.ip)) {
+      setDb((d) => ({
+        ...d,
+        accessVault: [
+          { id: uid(), sourceReportId: rep.id, address: r.address || "—", login: r.access.login || "", pass: r.access.pass || "", ip: r.access.ip || "", note: r.access.note || "" },
+          ...d.accessVault,
+        ],
+      }));
+    }
+  };
+
+  const setInventory = (crewId, rows) => setDb((d) => ({ ...d, inventory: { ...d.inventory, [crewId]: rows } }));
+
+  // ---- Представления ----
+  if (!me) {
+    return <LoginScreen onLogin={tryLogin} logoUrl={logoUrl} setLogoUrl={setLogoUrl} />;
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-slate-100 dark:from-neutral-950 dark:to-neutral-900 text-slate-900 dark:text-slate-100">
+      <Topbar me={me} onLogout={logout} setActiveTab={setActiveTab} activeTab={activeTab} />
+      <main className="max-w-7xl mx-auto p-4">
+        {activeTab === "tasks" && (
+          <TasksView
+            me={me}
+            db={db}
+            addTask={addTask}
+            updateTask={updateTask}
+            deleteTask={deleteTask}
+            filters={{ query, setQuery, onlyActive, setOnlyActive, assigneeType, setAssigneeType, assigneeId, setAssigneeId }}
+          />
+        )}
+        {activeTab === "reports" && (
+          <ReportsView me={me} db={db} addReport={addReport} />
+        )}
+        {activeTab === "inventory" && (
+          <InventoryView me={me} db={db} setInventory={setInventory} />
+        )}
+        {activeTab === "access" && (
+          <AccessView db={db} />
+        )}
+        {activeTab === "admin" && me.role === ROLES.SUPER_ADMIN && (
+          <AdminPanel db={db} setDb={setDb} />
+        )}
+      </main>
+    </div>
+  );
+}
+
+// ---- Topbar ----
+function Topbar({ me, onLogout, setActiveTab, activeTab }) {
+  const tabs = [
+    { key: "tasks", label: "Задачи" },
+    { key: "reports", label: "Отчёты" },
+    { key: "inventory", label: "Склад/Инструмент" },
+    { key: "access", label: "Доступ инфо" },
+  ];
+  if (me.role === ROLES.SUPER_ADMIN) tabs.push({ key: "admin", label: "Администрирование" });
+
+  return (
+    <div className="sticky top-0 z-40 backdrop-blur bg-white/70 dark:bg-neutral-950/70 border-b border-black/5 dark:border-white/10">
+      <div className="max-w-7xl mx-auto flex items-center justify-between px-4 py-3">
+        <div className="flex items-center gap-3">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 to-sky-500" />
+          <div>
+            <div className="text-sm uppercase tracking-wider text-slate-500">AWR</div>
+            <div className="text-base font-semibold">Assistant Work Resurs</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setActiveTab(t.key)}
+              className={`px-3 py-1.5 rounded-full text-sm font-medium transition ${activeTab === t.key ? "bg-slate-900 text-white dark:bg-white dark:text-black" : "hover:bg-slate-100 dark:hover:bg-neutral-800"}`}
+            >
+              {t.label}
+            </button>
+          ))}
+          <div className="mx-1 w-px h-5 bg-slate-200 dark:bg-neutral-700" />
+          <div className="text-sm mr-1">{me.name}</div>
+          <button onClick={onLogout} className="px-3 py-1.5 rounded-full text-sm border border-slate-300 dark:border-neutral-700 hover:bg-slate-100 dark:hover:bg-neutral-800">Выйти</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---- Login ----
+function LoginScreen({ onLogin, logoUrl, setLogoUrl }) {
+  const [login, setLogin] = useState("");
+  const [pass, setPass] = useState("");
+  const [err, setErr] = useState("");
+
+  const submit = (e) => {
+    e.preventDefault();
+    const r = onLogin(login.trim(), pass.trim());
+    if (!r.ok) setErr(r.err); else setErr("");
+  };
+
+  const onPickLogo = (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => setLogoUrl(reader.result);
+    reader.readAsDataURL(f);
+  };
+
+  return (
+    <div className="min-h-screen grid place-items-center bg-gradient-to-b from-indigo-50 to-sky-50 dark:from-neutral-950 dark:to-neutral-900 p-4">
+      <div className="w-full max-w-xl grid md:grid-cols-2 gap-0 rounded-3xl overflow-hidden shadow-2xl bg-white dark:bg-neutral-900 border border-black/5 dark:border-white/10">
+        <div className="p-6 md:p-8 bg-gradient-to-br from-indigo-500 to-sky-500 text-white flex flex-col items-center justify-center">
+          <div className="w-28 h-28 bg-white/10 rounded-2xl grid place-items-center overflow-hidden">
+            {logoUrl ? (
+              <img src={logoUrl} alt="logo" className="w-full h-full object-cover" />
+            ) : (
+              <span className="text-3xl font-black">AWR</span>
+            )}
+          </div>
+          <div className="mt-4 text-center">
+            <div className="text-sm uppercase tracking-wide/relaxed">Assistant Work Resurs</div>
+            <div className="text-lg font-semibold">Мини‑приложение</div>
+          </div>
+          <label className="mt-4 text-xs text-white/90 inline-flex items-center gap-2 cursor-pointer">
+            <input type="file" accept="image/*" className="hidden" onChange={onPickLogo} />
+            <span className="underline">Загрузить логотип</span>
+          </label>
+        </div>
+        <form onSubmit={submit} className="p-6 md:p-8">
+          <h1 className="text-xl font-semibold mb-1">Вход</h1>
+          <p className="text-sm text-slate-500 mb-4">Тест‑логины: «1», «2», «3», «4» / пароль «1»</p>
+          <div className="space-y-3">
+            <div>
+              <label className="text-sm">Логин</label>
+              <input value={login} onChange={(e)=>setLogin(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white dark:bg-neutral-900" placeholder="напр. 1" />
+            </div>
+            <div>
+              <label className="text-sm">Пароль</label>
+              <input type="password" value={pass} onChange={(e)=>setPass(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white dark:bg-neutral-900" placeholder="1" />
+            </div>
+            {err && <div className="text-sm text-red-600">{err}</div>}
+            <button className="w-full mt-2 px-4 py-2.5 rounded-xl bg-slate-900 text-white dark:bg-white dark:text-black font-medium hover:opacity-90">Войти</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ---- Задачи ----
+function TasksView({ me, db, addTask, updateTask, deleteTask, filters }) {
+  const { query, setQuery, onlyActive, setOnlyActive, assigneeType, setAssigneeType, assigneeId, setAssigneeId } = filters;
+
+  const [newOpen, setNewOpen] = useState(false);
+  const [reassign, setReassign] = useState(null); // { id }
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return db.tasks.filter((t) => {
+      if (onlyActive && !ACTIVE_STATUS_KEYS.has(t.status)) return false;
+      if (assigneeType !== "all" && t.assignedType !== assigneeType) return false;
+      if (assigneeId !== "all" && t.assignedId !== assigneeId) return false;
+      if (me.role === ROLES.CREW && me.crewId && !(t.assignedType === "crew" && t.assignedId === me.crewId)) return false;
+      if (me.role === ROLES.ADMIN) {
+        const myAdmin = admins[0]; // демо: текущий админ = a1
+        if (!(t.assignedType === "admin" && t.assignedId === myAdmin.id)) return false;
+      }
+      if (!q) return true;
+      const hay = `${t.title} ${t.address} ${t.description} ${t.tags?.join(" ")}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [db.tasks, query, onlyActive, assigneeType, assigneeId, me]);
+
+  const exportCSV = () => {
+    const csv = toCSV(filtered, [
+      { label: "id", get: (r) => r.id },
+      { label: "title", get: (r) => r.title },
+      { label: "address", get: (r) => r.address },
+      { label: "status", get: (r) => r.status },
+      { label: "assigneeType", get: (r) => r.assignedType },
+      { label: "assigneeId", get: (r) => r.assignedId },
+      { label: "dueDate", get: (r) => r.dueDate },
+      { label: "tags", get: (r) => (r.tags||[]).join("|") },
+    ]);
+    downloadText(`tasks_${new Date().toISOString().slice(0,10)}.csv`, csv);
+  };
+
+  return (
+    <div>
+      <Toolbar
+        title="Задачи"
+        right={
+          <>
+            <button onClick={exportCSV} className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-neutral-700 hover:bg-slate-100 dark:hover:bg-neutral-800 text-sm">Экспорт CSV</button>
+            {(me.role === ROLES.SUPER_ADMIN || me.role === ROLES.ADMIN) && (
+              <button onClick={() => setNewOpen(true)} className="px-3 py-1.5 rounded-lg bg-slate-900 text-white dark:bg-white dark:text-black text-sm">Новая задача</button>
+            )}
+          </>
+        }
+      />
+
+      <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+        <div className="col-span-2">
+          <input value={query} onChange={(e)=>setQuery(e.target.value)} placeholder="Поиск по названию, адресу, тегам…" className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" />
+        </div>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="checkbox" checked={onlyActive} onChange={(e)=>setOnlyActive(e.target.checked)} />
+          Только активные
+        </label>
+        <div className="grid grid-cols-2 gap-2">
+          <select value={assigneeType} onChange={(e)=>{ setAssigneeType(e.target.value); setAssigneeId("all"); }} className="px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900">
+            <option value="all">Все исполнители</option>
+            <option value="crew">Бригады</option>
+            <option value="admin">Админы</option>
+          </select>
+          <select value={assigneeId} onChange={(e)=>setAssigneeId(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900">
+            <option value="all">Все</option>
+            {(assigneeType === "crew" ? crews : assigneeType === "admin" ? admins : []).map((o)=> (
+              <option key={o.id} value={o.id}>{o.name}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {filtered.map((t) => (
+          <TaskCard key={t.id} me={me} task={t} onUpdate={updateTask} onDelete={deleteTask} onReassign={() => setReassign({ id: t.id })} />
+        ))}
+        {filtered.length === 0 && <div className="text-slate-500">Ничего не найдено</div>}
+      </div>
+
+      <Modal open={newOpen} onClose={() => setNewOpen(false)}>
+        <NewTaskForm onClose={() => setNewOpen(false)} onSave={(task) => { addTask(task); setNewOpen(false); }} />
+      </Modal>
+
+      <Modal open={!!reassign} onClose={() => setReassign(null)}>
+        <ReassignForm
+          task={db.tasks.find((x) => x.id === reassign?.id)}
+          onClose={() => setReassign(null)}
+          onSave={(patch) => { updateTask(reassign.id, patch); setReassign(null); }}
+        />
+      </Modal>
+    </div>
+  );
+}
+
+function TaskCard({ me, task, onUpdate, onDelete, onReassign }) {
+  const m = statusMeta(task.status);
+  const canEdit = me.role === ROLES.SUPER_ADMIN || me.role === ROLES.ADMIN;
+
+  const nextStatus = () => {
+    const order = ["new", "in_progress", "paused", "blocked", "done"];
+    const i = order.indexOf(task.status);
+    const nxt = order[Math.min(order.length - 1, i + 1)];
+    onUpdate(task.id, { status: nxt });
+  };
+
+  return (
+    <div className="rounded-2xl border border-black/5 dark:border-white/10 bg-white dark:bg-neutral-900 p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-base font-semibold">{task.title}</div>
+          <div className="text-sm text-slate-500">{task.address}</div>
+        </div>
+        <BadgeStatus status={task.status} />
+      </div>
+      <div className="mt-2 text-sm text-slate-700 dark:text-slate-300">{task.description}</div>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {(task.tags||[]).map((t) => <Pill key={t}>{t}</Pill>)}
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+        <div className="flex items-center gap-2">
+          <span className="text-slate-500">Исполнитель:</span>
+          <span>
+            {task.assignedType === "crew" ? crews.find(c=>c.id===task.assignedId)?.name : admins.find(a=>a.id===task.assignedId)?.name}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-slate-500">Срок:</span>
+          <span>{toDateInputValue(task.dueDate)}</span>
+        </div>
+      </div>
+      <div className="mt-3 flex items-center gap-2">
+        {canEdit && <button onClick={nextStatus} className="px-3 py-1.5 rounded-lg bg-slate-900 text-white dark:bg-white dark:text-black text-sm">След. статус</button>}
+        {canEdit && <button onClick={onReassign} className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-neutral-700 text-sm hover:bg-slate-100 dark:hover:bg-neutral-800">Переназначить</button>}
+        {canEdit && <button onClick={()=>onDelete(task.id)} className="ml-auto px-3 py-1.5 rounded-lg text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">Удалить</button>}
+      </div>
+    </div>
+  );
+}
+
+function NewTaskForm({ onClose, onSave }) {
+  const [title, setTitle] = useState("");
+  const [address, setAddress] = useState("");
+  const [description, setDescription] = useState("");
+  const [assignedType, setAssignedType] = useState("crew");
+  const [assignedId, setAssignedId] = useState("c1");
+  const [dueDate, setDueDate] = useState(toDateInputValue(new Date().toISOString()));
+  const [tags, setTags] = useState("FTTH");
+
+  const submit = (e) => {
+    e.preventDefault();
+    onSave({ title, address, description, status: "new", priority: "normal", dueDate: new Date(dueDate).toISOString(), tags: tags.split(/[,; ]+/).filter(Boolean), assignedType, assignedId, createdBy: "local" });
+  };
+
+  return (
+    <div>
+      <h3 className="text-lg font-semibold mb-3">Новая задача</h3>
+      <form onSubmit={submit} className="grid md:grid-cols-2 gap-3">
+        <div className="md:col-span-2">
+          <label className="text-sm">Название</label>
+          <input value={title} onChange={(e)=>setTitle(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" required />
+        </div>
+        <div>
+          <label className="text-sm">Адрес</label>
+          <input value={address} onChange={(e)=>setAddress(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" required />
+        </div>
+        <div>
+          <label className="text-sm">Срок</label>
+          <input type="date" value={dueDate} onChange={(e)=>setDueDate(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" />
+        </div>
+        <div className="md:col-span-2">
+          <label className="text-sm">Описание</label>
+          <textarea value={description} onChange={(e)=>setDescription(e.target.value)} rows={3} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" />
+        </div>
+        <div>
+          <label className="text-sm">Исполнитель</label>
+          <select value={assignedType} onChange={(e)=>{ setAssignedType(e.target.value); setAssignedId(e.target.value === "crew" ? "c1" : "a1") }} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900">
+            <option value="crew">Бригада</option>
+            <option value="admin">Админ</option>
+          </select>
+        </div>
+        <div>
+          <label className="text-sm">Конкретно</label>
+          <select value={assignedId} onChange={(e)=>setAssignedId(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900">
+            {(assignedType === "crew" ? crews : admins).map((o)=> (
+              <option key={o.id} value={o.id}>{o.name}</option>
+            ))}
+          </select>
+        </div>
+        <div className="md:col-span-2">
+          <label className="text-sm">Теги (через пробел/запятую)</label>
+          <input value={tags} onChange={(e)=>setTags(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" />
+        </div>
+        <div className="md:col-span-2 flex items-center gap-2 mt-2">
+          <button className="px-3 py-1.5 rounded-lg bg-slate-900 text-white dark:bg-white dark:text-black text-sm">Сохранить</button>
+          <button type="button" onClick={onClose} className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-neutral-700 text-sm">Отмена</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function ReassignForm({ task, onClose, onSave }) {
+  const [assignedType, setAssignedType] = useState(task?.assignedType || "crew");
+  const [assignedId, setAssignedId] = useState(task?.assignedId || "c1");
+  const submit = (e) => { e.preventDefault(); onSave({ assignedType, assignedId }); };
+  return (
+    <div>
+      <h3 className="text-lg font-semibold mb-3">Переназначить</h3>
+      <form onSubmit={submit} className="grid md:grid-cols-2 gap-3">
+        <div>
+          <label className="text-sm">Исполнитель</label>
+          <select value={assignedType} onChange={(e)=>{ setAssignedType(e.target.value); setAssignedId(e.target.value === "crew" ? "c1" : "a1") }} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900">
+            <option value="crew">Бригада</option>
+            <option value="admin">Админ</option>
+          </select>
+        </div>
+        <div>
+          <label className="text-sm">Конкретно</label>
+          <select value={assignedId} onChange={(e)=>setAssignedId(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900">
+            {(assignedType === "crew" ? crews : admins).map((o)=> (
+              <option key={o.id} value={o.id}>{o.name}</option>
+            ))}
+          </select>
+        </div>
+        <div className="md:col-span-2 flex items-center gap-2 mt-2">
+          <button className="px-3 py-1.5 rounded-lg bg-slate-900 text-white dark:bg-white dark:text-black text-sm">Сохранить</button>
+          <button type="button" onClick={onClose} className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-neutral-700 text-sm">Отмена</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ---- Отчёты ----
+function ReportsView({ me, db, addReport }) {
+  const [q, setQ] = useState("");
+  const [status, setStatus] = useState("all");
+  const [crew, setCrew] = useState("all");
+
+  const filtered = useMemo(() => {
+    const qq = q.trim().toLowerCase();
+    return db.reports.filter((r) => {
+      if (status !== "all" && r.status !== status) return false;
+      if (crew !== "all" && r.crewId !== crew) return false;
+      if (me.role === ROLES.CREW && me.crewId && r.crewId !== me.crewId) return false;
+      if (!qq) return true;
+      const hay = `${r.text} ${r.address} ${r.access?.login||""} ${r.access?.ip||""}`.toLowerCase();
+      return hay.includes(qq);
+    });
+  }, [db.reports, q, status, crew, me]);
+
+  const exportCSV = () => {
+    const csv = toCSV(filtered, [
+      { label: "id", get: (r) => r.id },
+      { label: "createdAt", get: (r) => r.createdAt },
+      { label: "crewId", get: (r) => r.crewId },
+      { label: "status", get: (r) => r.status },
+      { label: "address", get: (r) => r.address },
+      { label: "text", get: (r) => r.text },
+      { label: "access_login", get: (r) => r.access?.login || "" },
+      { label: "access_pass", get: (r) => r.access?.pass || "" },
+      { label: "access_ip", get: (r) => r.access?.ip || "" },
+    ]);
+    downloadText(`reports_${new Date().toISOString().slice(0,10)}.csv`, csv);
+  };
+
+  const [openNew, setOpenNew] = useState(false);
+
+  return (
+    <div>
+      <Toolbar
+        title="Отчёты"
+        right={
+          <>
+            <button onClick={exportCSV} className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-neutral-700 hover:bg-slate-100 dark:hover:bg-neutral-800 text-sm">Экспорт CSV</button>
+            {(me.role === ROLES.CREW || me.role === ROLES.ADMIN || me.role === ROLES.SUPER_ADMIN) && (
+              <button onClick={()=>setOpenNew(true)} className="px-3 py-1.5 rounded-lg bg-slate-900 text-white dark:bg-white dark:text-black text-sm">Новый отчёт</button>
+            )}
+          </>
+        }
+      />
+
+      <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+        <input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Поиск по адресу/тексту/доступам…" className="px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" />
+        <select value={status} onChange={(e)=>setStatus(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900">
+          <option value="all">Все статусы</option>
+          <option value="success">Успех</option>
+          <option value="partial">Частично</option>
+          <option value="fail">Провал</option>
+        </select>
+        <select value={crew} onChange={(e)=>setCrew(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900">
+          <option value="all">Все бригады</option>
+          {crews.map((c)=>(<option key={c.id} value={c.id}>{c.name}</option>))}
+        </select>
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {filtered.map((r) => <ReportCard key={r.id} r={r} />)}
+        {filtered.length === 0 && <div className="text-slate-500">Ничего не найдено</div>}
+      </div>
+
+      <Modal open={openNew} onClose={()=>setOpenNew(false)}>
+        <NewReportForm onClose={()=>setOpenNew(false)} onSave={(data)=>{ addReport(data); setOpenNew(false); }} />
+      </Modal>
+    </div>
+  );
+}
+
+function ReportCard({ r }) {
+  return (
+    <div className="rounded-2xl border border-black/5 dark:border-white/10 bg-white dark:bg-neutral-900 p-4 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="font-semibold">{r.address || "—"}</div>
+          <div className="text-xs text-slate-500">{new Date(r.createdAt).toLocaleString()}</div>
+        </div>
+        <Pill color={r.status === "success" ? "bg-green-100 text-green-700" : r.status === "fail" ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700"}>
+          {r.status === "success" ? "Успех" : r.status === "fail" ? "Провал" : "Частично"}
+        </Pill>
+      </div>
+      <div className="mt-2 text-sm whitespace-pre-wrap">{r.text}</div>
+      {(r.access && (r.access.login || r.access.ip)) && (
+        <div className="mt-3 text-sm p-3 rounded-xl bg-slate-50 dark:bg-neutral-800 border border-black/5 dark:border-white/10">
+          <div className="font-medium mb-1">Доступ:</div>
+          <div className="grid grid-cols-2 gap-2">
+            <div><span className="text-slate-500">Логин:</span> {r.access.login || "—"}</div>
+            <div><span className="text-slate-500">Пароль:</span> {r.access.pass || "—"}</div>
+            <div><span className="text-slate-500">IP:</span> {r.access.ip || "—"}</div>
+            <div><span className="text-slate-500">Прим.:</span> {r.access.note || "—"}</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NewReportForm({ onClose, onSave }) {
+  const [address, setAddress] = useState("");
+  const [crewId, setCrewId] = useState("c1");
+  const [status, setStatus] = useState("success");
+  const [text, setText] = useState("");
+  const [login, setLogin] = useState("");
+  const [pass, setPass] = useState("");
+  const [ip, setIp] = useState("");
+  const [note, setNote] = useState("");
+
+  const submit = (e) => {
+    e.preventDefault();
+    onSave({ taskId: null, crewId, authorUserId: "local", address, status, text, photos: [], access: { login, pass, ip, note } });
+  };
+
+  return (
+    <div>
+      <h3 className="text-lg font-semibold mb-3">Новый отчёт</h3>
+      <form onSubmit={submit} className="grid md:grid-cols-2 gap-3">
+        <div className="md:col-span-2">
+          <label className="text-sm">Адрес</label>
+          <input value={address} onChange={(e)=>setAddress(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" required />
+        </div>
+        <div>
+          <label className="text-sm">Бригада</label>
+          <select value={crewId} onChange={(e)=>setCrewId(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900">
+            {crews.map((c)=>(<option key={c.id} value={c.id}>{c.name}</option>))}
+          </select>
+        </div>
+        <div>
+          <label className="text-sm">Статус</label>
+          <select value={status} onChange={(e)=>setStatus(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900">
+            <option value="success">Успех</option>
+            <option value="partial">Частично</option>
+            <option value="fail">Провал</option>
+          </select>
+        </div>
+        <div className="md:col-span-2">
+          <label className="text-sm">Текст отчёта</label>
+          <textarea value={text} onChange={(e)=>setText(e.target.value)} rows={4} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" required />
+        </div>
+        <div className="md:col-span-2 grid md:grid-cols-2 gap-3 p-3 rounded-xl bg-slate-50 dark:bg-neutral-800 border border-black/5 dark:border-white/10">
+          <div className="md:col-span-2 font-medium">Доступ (по желанию, сохранится в «Доступ инфо»)</div>
+          <div>
+            <label className="text-sm">Логин</label>
+            <input value={login} onChange={(e)=>setLogin(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" />
+          </div>
+          <div>
+            <label className="text-sm">Пароль</label>
+            <input value={pass} onChange={(e)=>setPass(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" />
+          </div>
+          <div>
+            <label className="text-sm">IP</label>
+            <input value={ip} onChange={(e)=>setIp(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" />
+          </div>
+          <div>
+            <label className="text-sm">Примечание</label>
+            <input value={note} onChange={(e)=>setNote(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" />
+          </div>
+        </div>
+        <div className="md:col-span-2 flex items-center gap-2 mt-2">
+          <button className="px-3 py-1.5 rounded-lg bg-slate-900 text-white dark:bg-white dark:text-black text-sm">Сохранить</button>
+          <button type="button" onClick={onClose} className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-neutral-700 text-sm">Отмена</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+// ---- Склад/Инструмент ----
+function InventoryView({ me, db, setInventory }) {
+  const [crewId, setCrewId] = useState(me.role === ROLES.CREW ? me.crewId : "c1");
+  const rows = db.inventory[crewId] || [];
+  const canEdit = me.role === ROLES.STOREKEEPER || me.role === ROLES.SUPER_ADMIN;
+
+  const addRow = () => setInventory(crewId, [{ id: uid(), name: "", qty: 0, unit: "шт" }, ...rows]);
+  const upd = (id, patch) => setInventory(crewId, rows.map((r)=> r.id===id ? { ...r, ...patch } : r));
+  const del = (id) => setInventory(crewId, rows.filter((r)=> r.id!==id));
+
+  return (
+    <div>
+      <Toolbar
+        title="Склад и инструмент"
+        right={<></>}
+      />
+
+      <div className="flex flex-wrap gap-2 items-center mb-3">
+        <select disabled={me.role === ROLES.CREW} value={crewId} onChange={(e)=>setCrewId(e.target.value)} className="px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900">
+          {crews.map((c)=>(<option key={c.id} value={c.id}>{c.name}</option>))}
+        </select>
+        {canEdit && <button onClick={addRow} className="px-3 py-1.5 rounded-lg bg-slate-900 text-white dark:bg-white dark:text-black text-sm">Добавить позицию</button>}
+      </div>
+
+      <div className="overflow-auto rounded-2xl border border-black/5 dark:border-white/10">
+        <table className="min-w-full text-sm">
+          <thead className="bg-slate-50 dark:bg-neutral-800 text-slate-600 dark:text-slate-300">
+            <tr>
+              <th className="text-left p-2">Наименование</th>
+              <th className="text-left p-2 w-24">Кол‑во</th>
+              <th className="text-left p-2 w-24">Ед.</th>
+              <th className="text-right p-2 w-24"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r)=> (
+              <tr key={r.id} className="border-t border-black/5 dark:border-white/10">
+                <td className="p-2">
+                  {canEdit ? (
+                    <input value={r.name} onChange={(e)=>upd(r.id,{name:e.target.value})} className="w-full px-2 py-1 rounded-lg border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" />
+                  ) : r.name}
+                </td>
+                <td className="p-2">
+                  {canEdit ? (
+                    <input type="number" value={r.qty} onChange={(e)=>upd(r.id,{qty:Number(e.target.value)})} className="w-full px-2 py-1 rounded-lg border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" />
+                  ) : r.qty}
+                </td>
+                <td className="p-2">
+                  {canEdit ? (
+                    <input value={r.unit} onChange={(e)=>upd(r.id,{unit:e.target.value})} className="w-full px-2 py-1 rounded-lg border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" />
+                  ) : r.unit}
+                </td>
+                <td className="p-2 text-right">
+                  {canEdit && <button onClick={()=>del(r.id)} className="px-2 py-1 rounded-lg text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">Удалить</button>}
+                </td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr><td className="p-3 text-slate-500" colSpan={4}>Нет позиций</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ---- Доступы (из отчётов) ----
+function AccessView({ db }) {
+  const [q, setQ] = useState("");
+  const filtered = useMemo(() => {
+    const qq = q.trim().toLowerCase();
+    return db.accessVault.filter((a) => {
+      if (!qq) return true;
+      const hay = `${a.address} ${a.login} ${a.ip} ${a.note}`.toLowerCase();
+      return hay.includes(qq);
+    });
+  }, [db.accessVault, q]);
+
+  return (
+    <div>
+      <Toolbar title="Доступ инфо" right={<></>} />
+      <div className="mb-3">
+        <input value={q} onChange={(e)=>setQ(e.target.value)} placeholder="Поиск по адресу/логину/IP/прим…" className="w-full px-3 py-2 rounded-xl border border-slate-300 dark:border-neutral-700 bg-white dark:bg-neutral-900" />
+      </div>
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {filtered.map((a) => (
+          <div key={a.id} className="rounded-2xl border border-black/5 dark:border-white/10 bg-white dark:bg-neutral-900 p-4 shadow-sm">
+            <div className="font-semibold">{a.address || "—"}</div>
+            <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
+              <div><span className="text-slate-500">Логин:</span> {a.login || "—"}</div>
+              <div><span className="text-slate-500">Пароль:</span> {a.pass || "—"}</div>
+              <div><span className="text-slate-500">IP:</span> {a.ip || "—"}</div>
+              <div><span className="text-slate-500">Прим.:</span> {a.note || "—"}</div>
+            </div>
+          </div>
+        ))}
+        {filtered.length === 0 && <div className="text-slate-500">Ничего не найдено</div>}
+      </div>
+    </div>
+  );
+}
+
+// ---- Администрирование (для супер‑админа) ----
+function AdminPanel({ db, setDb }) {
+  const resetDemo = () => setDb(initialState);
+  const exportJson = () => downloadText("awr_dump.json", JSON.stringify(db, null, 2));
+  const importJson = (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try { const obj = JSON.parse(reader.result); setDb(obj); } catch {}
+    };
+    reader.readAsText(f);
+  };
+  return (
+    <div>
+      <Toolbar title="Администрирование" right={<></>} />
+      <div className="grid md:grid-cols-2 gap-3">
+        <div className="p-4 rounded-2xl border border-black/5 dark:border-white/10 bg-white dark:bg-neutral-900">
+          <div className="font-semibold mb-2">Данные</div>
+          <div className="flex flex-wrap gap-2">
+            <button onClick={exportJson} className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-neutral-700 text-sm">Экспорт JSON</button>
+            <label className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-neutral-700 text-sm cursor-pointer">
+              Импорт JSON
+              <input type="file" accept="application/json" className="hidden" onChange={importJson} />
+            </label>
+            <button onClick={resetDemo} className="ml-auto px-3 py-1.5 rounded-lg text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20">Сброс демо</button>
+          </div>
+          <div className="mt-3 text-sm text-slate-500">Поддержка серверной БД (PostgreSQL) и API будет добавлена при подключении бекенда.</div>
+        </div>
+      </div>
+    </div>
+  );
+}
